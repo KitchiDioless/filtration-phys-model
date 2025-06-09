@@ -42,3 +42,13 @@
   - kappa: порог проводимости (по умолчанию 30)
   - gamma: скорость диффузии (по умолчанию 0.15)
   - количество итераций: 10
+
+## Графики
+
+### Сигналы до и после обработки
+
+![Signal Processing Steps](first_model_dir/signal_plots.png)
+
+### Сравнение сигналов
+
+![Overlapped Signals](first_model_dir/signals_overlapped.png)

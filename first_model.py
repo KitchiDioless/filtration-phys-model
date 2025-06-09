@@ -38,14 +38,17 @@ class SignalProcessor:
             raise ValueError("No signal to save")
     
     def add_noise(self, method: str = 'gaussian', noise_params: dict = None) -> None:
+        if self.original_signal is None:
+            raise ValueError("No signal loaded")
+            
         if method == 'gaussian':
             noise = np.random.normal(noise_params.get('mean', 0),
                                    noise_params.get('std', 0.05),
                                    size=self.original_signal.shape)
+            self.noisy_signal = self.original_signal + noise
+            self.noisy_signal = np.clip(self.noisy_signal, -1.0, 1.0)
         else:
             raise ValueError(f"Unsupported noise method: {method}")
-            
-        self.noisy_signal = self.original_signal + noise
 
     def get_power_spectrum(self, signal: np.ndarray, frame_length: int) -> Tuple[np.ndarray, np.ndarray]:
         window = np.hanning(frame_length)
@@ -56,9 +59,8 @@ class SignalProcessor:
         return power, freq
 
     def filter_signal_by_window_analysis(self, filter_params: dict = None) -> None:
-        if self.noisy_signal is None:
-            raise ValueError("First add noise to the signal")
-
+        if self.original_signal is None:
+            raise ValueError("No signal loaded")
 
         frame_length = filter_params.get('frame_length', 4096)
         overlap = filter_params.get('overlap', 0.75)
@@ -66,21 +68,21 @@ class SignalProcessor:
         
         hop_length = int(frame_length * (1 - overlap))
         
-        output = np.zeros_like(self.noisy_signal)
-        window_sum = np.zeros_like(self.noisy_signal)
+        self.filtered_signal = np.zeros_like(self.original_signal)
+        window_sum = np.zeros_like(self.original_signal)
         
         window = np.hanning(frame_length)
         
         n_noise_frames = 5
         noise_power = np.zeros(frame_length // 2 + 1)
         for i in range(n_noise_frames):
-            if i * hop_length + frame_length <= len(self.noisy_signal):
-                frame = self.noisy_signal[i * hop_length:i * hop_length + frame_length]
+            if i * hop_length + frame_length <= len(self.original_signal):
+                frame = self.original_signal[i * hop_length:i * hop_length + frame_length]
                 power, _ = self.get_power_spectrum(frame, frame_length)
                 noise_power += power / n_noise_frames
         
-        for i in range(0, len(self.noisy_signal) - frame_length + 1, hop_length):
-            frame = self.noisy_signal[i:i + frame_length]
+        for i in range(0, len(self.original_signal) - frame_length + 1, hop_length):
+            frame = self.original_signal[i:i + frame_length]
             
             # spectrum of current frame
             power, freq = self.get_power_spectrum(frame, frame_length)
@@ -89,20 +91,21 @@ class SignalProcessor:
             snr = power / (noise_power + 1e-10)
             gain = np.maximum(1 - noise_reduction / np.maximum(snr, noise_reduction), 0.1)
             
-            # apply mask
             spectrum = fft.rfft(frame * window)
             filtered_spectrum = spectrum * gain
             
             # inverse transform
             filtered_frame = fft.irfft(filtered_spectrum)
             
-            # overlap-add
-            output[i:i + frame_length] += filtered_frame * window
+            # Overlap-add
+            self.filtered_signal[i:i + frame_length] += filtered_frame * window
             window_sum[i:i + frame_length] += window ** 2
         
         # normalization
         window_sum = np.maximum(window_sum, 1e-10)
-        self.filtered_signal = output / window_sum
+        self.filtered_signal = self.filtered_signal / window_sum
+        
+        self.filtered_signal = np.clip(self.filtered_signal, -1.0, 1.0)
         
         # normalization of amplitude with preserving dynamic range
         target_rms = np.sqrt(np.mean(self.original_signal ** 2))
@@ -228,6 +231,39 @@ class SignalProcessor:
         plt.tight_layout()
         plt.show()
 
+    def plot_signals(self) -> None:
+        if self.time_points is None or self.original_signal is None:
+            raise ValueError("No signals loaded to plot")
+            
+        plt.figure(figsize=(15, 10))
+        
+        plt.subplot(3, 1, 1)
+        plt.plot(self.time_points, self.original_signal)
+        plt.title('Original Signal')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        
+        if self.noisy_signal is not None:
+            plt.subplot(3, 1, 2)
+            plt.plot(self.time_points, self.noisy_signal)
+            plt.title('Noisy Signal')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Amplitude')
+            plt.grid(True)
+        
+        if self.filtered_signal is not None:
+            plt.subplot(3, 1, 3)
+            plt.plot(self.time_points, self.filtered_signal)
+            plt.title('Filtered Signal')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Amplitude')
+            plt.grid(True)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, 'signal_plots.png'))
+        plt.show()
+
 def create_test_signal(duration: float = 1.0, sampling_rate: int = 44100) -> Tuple[np.ndarray, np.ndarray]:
     t = np.linspace(0, duration, int(sampling_rate * duration))
     signal = (np.sin(2 * np.pi * 440 * t) +
@@ -237,32 +273,123 @@ def create_test_signal(duration: float = 1.0, sampling_rate: int = 44100) -> Tup
 
 def main():
     processor = SignalProcessor()
+
+    # print("Processing audio signal...")
     
-    print("Processing audio signal...")
+    # t, test_signal = create_test_signal(duration=2.0)
     
-    t, test_signal = create_test_signal(duration=2.0)
+    # test_signal_path = os.path.join(OUTPUT_DIR, "original_signal.wav")
+    # processor.sampling_rate = 44100
+    # processor.original_signal = test_signal
+    # processor.time_points = t
+    # processor.save_wav_signal(test_signal_path)
     
-    test_signal_path = os.path.join(OUTPUT_DIR, "original_signal.wav")
-    processor.sampling_rate = 44100
-    processor.original_signal = test_signal
-    processor.time_points = t
-    processor.save_wav_signal(test_signal_path)
+    # processor.load_wav_signal(test_signal_path)
+    # processor.add_noise(method='gaussian', noise_params={'mean': 0, 'std': 0.05})
     
-    processor.load_wav_signal(test_signal_path)
-    processor.add_noise(method='gaussian', noise_params={'mean': 0, 'std': 0.05})
+    # noisy_signal_path = os.path.join(OUTPUT_DIR, "noisy_signal.wav")
+    # processor.save_wav_signal(noisy_signal_path, processor.noisy_signal)
     
-    noisy_signal_path = os.path.join(OUTPUT_DIR, "noisy_signal.wav")
-    processor.save_wav_signal(noisy_signal_path, processor.noisy_signal)
+    # processor.filter_signal_by_window_analysis(filter_params={
+    #     'frame_length': 4096,
+    #     'overlap': 0.75,
+    #     'noise_reduction_koeff': 0.3
+    # })
     
-    processor.filter_signal_by_window_analysis(filter_params={
-        'frame_length': 4096,
-        'overlap': 0.75,
-        'noise_reduction_koeff': 0.3
-    })
+    # filtered_signal_path = os.path.join(OUTPUT_DIR, "filtered_signal.wav")
+    # processor.save_wav_signal(filtered_signal_path, processor.filtered_signal)
     
-    filtered_signal_path = os.path.join(OUTPUT_DIR, "filtered_signal.wav")
-    processor.save_wav_signal(filtered_signal_path, processor.filtered_signal)
-    
+    print("\nProcessing signal_11.npy...")
+    try:
+        signal_data = np.load('first_model_dir/signal_11.npy')
+        
+        signal_max = np.max(np.abs(signal_data))
+        signal_data = signal_data / signal_max
+        
+        processor.original_signal = signal_data.copy()
+        processor.sampling_rate = 44100
+        processor.time_points = np.arange(len(signal_data)) / processor.sampling_rate
+        
+        signal11_wav_path = os.path.join(OUTPUT_DIR, "signal11_original.wav")
+        processor.save_wav_signal(signal11_wav_path)
+        
+        processor.add_noise(method='gaussian', noise_params={'mean': 0, 'std': 0.1})
+       
+        noisy_signal11_wav_path = os.path.join(OUTPUT_DIR, "signal11_noisy.wav")
+        processor.save_wav_signal(noisy_signal11_wav_path, processor.noisy_signal)
+        
+        processor.original_signal = processor.noisy_signal.copy()
+        processor.filter_signal_by_window_analysis(filter_params={
+            'frame_length': 4096,
+            'overlap': 0.75,
+            'noise_reduction_koeff': 0.3
+        })
+        
+        filtered_signal11_wav_path = os.path.join(OUTPUT_DIR, "signal11_filtered.wav")
+        processor.save_wav_signal(filtered_signal11_wav_path, processor.filtered_signal)
+        
+        original_signal = signal_data.copy()
+        noisy_signal = processor.noisy_signal.copy()
+        filtered_signal = processor.filtered_signal.copy()
+        
+        plt.figure(figsize=(15, 10))
+        plt.suptitle('Signal Processing Results', fontsize=16)
+        
+        plt.subplot(3, 1, 1)
+        plt.plot(processor.time_points, original_signal)
+        plt.title(f'Original Signal (normalized, max abs: {signal_max:.2f})')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        
+        plt.subplot(3, 1, 2)
+        plt.plot(processor.time_points, noisy_signal)
+        plt.title('Noisy Signal')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        
+        plt.subplot(3, 1, 3)
+        plt.plot(processor.time_points, filtered_signal)
+        plt.title('Filtered Signal')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, 'signal_plots.png'))
+        plt.show()
+        
+        plt.figure(figsize=(15, 6))
+        plt.plot(processor.time_points, noisy_signal, 'r', alpha=0.6, label='Noisy Signal')
+        plt.plot(processor.time_points, original_signal, 'g', alpha=0.6, label='Original Signal')
+        plt.plot(processor.time_points, filtered_signal, 'b', alpha=0.8, label='Filtered Signal')
+        
+        plt.title('Signal Comparison (Overlapped)')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Amplitude')
+        plt.grid(True)
+        plt.legend()
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(OUTPUT_DIR, 'signals_overlapped.png'))
+        plt.show()
+        
+        print("\nSignal11 processing completed!")
+        print(f"Files saved:")
+        print("\nWAV files:")
+        print(f"- {signal11_wav_path}")
+        print(f"- {noisy_signal11_wav_path}")
+        print(f"- {filtered_signal11_wav_path}")
+        print("\nPlots:")
+        print("- signal_plots.png")
+        print("- signals_overlapped.png")
+        
+    except FileNotFoundError:
+        print("signal11.npy file not found in first_model_dir!")
+    except Exception as e:
+        print(f"Error processing signal11.npy: {e}")
+
     print("\nProcessing image...")
     
     image_path = os.path.join(OUTPUT_DIR, "example.jpg")
@@ -282,9 +409,13 @@ def main():
     
     print("\nDone! Files saved in directory", OUTPUT_DIR)
     print("Audio:")
-    print(f"- {test_signal_path}")
-    print(f"- {noisy_signal_path}")
-    print(f"- {filtered_signal_path}")
+    # print(f"- {test_signal_path}")
+    # print(f"- {noisy_signal_path}")
+    # print(f"- {filtered_signal_path}")
+
+    print(f"- {signal11_wav_path}")
+    print(f"- {noisy_signal11_wav_path}")
+    print(f"- {filtered_signal11_wav_path}")
     
     if os.path.exists(image_path):
         print("Images:")
